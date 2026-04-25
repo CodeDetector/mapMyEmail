@@ -1,4 +1,3 @@
-const pLimit = require('p-limit');
 const gmailService = require('./gmailService');
 const { supabaseService, intelligenceService } = require('wa-field-tracker-core');
 const crypto = require('crypto');
@@ -96,7 +95,7 @@ async function connectToEmail() {
             console.log(`🔍 Omni-Brain: Polling ${authRecords.length} enabled inboxes...`);
 
             // 2. Schedule INDEPENDENT tasks with concurrency limit
-            const tasks = authRecords.map(record => limit(() => pollInboxForEmployee(record)));
+            const tasks = authRecords.map(record => pollInboxForEmployee(record));
             
             // Wait for all to complete before next cycle starts
             await Promise.all(tasks);
