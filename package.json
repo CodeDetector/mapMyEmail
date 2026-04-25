@@ -1,0 +1,17 @@
+{
+  "name": "wa-field-tracker-feeder-email",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.103.0",
+    "dotenv": "^17.3.1",
+    "googleapis": "^171.4.0",
+    "p-limit": "^6.1.0",
+    "pino": "^10.3.1",
+    "wa-field-tracker-core": "file:../core"
+  }
+}
