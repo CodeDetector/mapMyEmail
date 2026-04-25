@@ -5,7 +5,7 @@ const crypto = require('crypto');
 // Sequential Worker Pool Pattern: 
 // 1. Independent processing per employee (Parallel)
 // 2. Sequential processing for each employee's emails (Serial)
-const limit = pLimit(5); // Process up to 5 employees concurrently
+
 
 const extractEmail = (str) => {
     if (!str) return null;
