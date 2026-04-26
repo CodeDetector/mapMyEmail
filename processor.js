@@ -1,5 +1,6 @@
 const gmailService = require('./gmailService');
-const { supabaseService, intelligenceService } = require('wa-field-tracker-core');
+const supabaseService = require('./supabaseService');
+const intelligenceService = require('./intelligenceService');
 const crypto = require('crypto');
 
 // Sequential Worker Pool Pattern: 

@@ -10,7 +10,6 @@
     "@supabase/supabase-js": "^2.103.0",
     "dotenv": "^17.3.1",
     "googleapis": "^171.4.0",
-    "pino": "^10.3.1",
-    "wa-field-tracker-core": "file:../core"
+    "pino": "^10.3.1"
   }
 }

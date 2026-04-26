@@ -1,5 +1,5 @@
 const { google } = require('googleapis');
-const { config } = require('wa-field-tracker-core');
+const config = require('./config');
 const SCOPES = ['https://www.googleapis.com/auth/gmail.modify'];
 
 class GmailService {
