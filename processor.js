@@ -1,6 +1,7 @@
 const gmailService = require('./gmailService');
 const supabaseService = require('./supabaseService');
 const intelligenceService = require('./intelligenceService');
+const knowledgeMapService = require('./knowledgeMapService');
 const crypto = require('crypto');
 
 // Sequential Worker Pool Pattern: 
@@ -63,6 +64,10 @@ async function processIndividualEmail(email, record, tokens) {
     };
 
     await supabaseService.logEmailToDatabase(emailPayload);
+
+    // Flag this employee's knowledge map for rebuild
+    await supabaseService.markKnowledgeMapDirty(currentEmployeeId);
+
     await intelligenceService.processMessageForGraph(
         `Subject: ${email.subject}\n\n${email.body}`,
         { messageId: `GMAIL-${email.id}`, sender: email.from }
@@ -88,6 +93,9 @@ async function pollInboxForEmployee(record) {
 
 async function connectToEmail() {
     console.log('📬 Starting Omni-Brain Sequential Worker Pool...');
+
+    // Start the 15-minute knowledge map rebuild cycle
+    knowledgeMapService.start();
 
     setInterval(async () => {
         try {
