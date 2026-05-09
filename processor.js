@@ -1,13 +1,8 @@
-const gmailService = require('./gmailService');
-const supabaseService = require('./supabaseService');
+const gmailService        = require('./gmailService');
+const supabaseService     = require('./supabaseService');
 const intelligenceService = require('./intelligenceService');
 const knowledgeMapService = require('./knowledgeMapService');
-const crypto = require('crypto');
-
-// Sequential Worker Pool Pattern: 
-// 1. Independent processing per employee (Parallel)
-// 2. Sequential processing for each employee's emails (Serial)
-
+const crypto              = require('crypto');
 
 const extractEmail = (str) => {
     if (!str) return null;
@@ -15,109 +10,113 @@ const extractEmail = (str) => {
     return match[1].trim().toLowerCase();
 };
 
+// ── Default handler (used when running the feeder standalone) ────────────────
+// Mirrors the original behaviour: write to emails table + graph.
+async function _defaultEmailHandler(parsedEmail) {
+    await supabaseService.logEmailToDatabase(parsedEmail);
+    await supabaseService.markKnowledgeMapDirty(parsedEmail.employeeId);
+    await intelligenceService.processMessageForGraph(parsedEmail.message, {
+        messageId: parsedEmail.messageId,
+        sender:    parsedEmail.sender,
+    });
+}
+
+// Module-level handler — replaced by wa-field-tracker at startup.
+let _emailHandler = _defaultEmailHandler;
+
+function setEmailHandler(fn) {
+    _emailHandler = fn;
+}
+
+// ── Core parsing (no DB writes here) ─────────────────────────────────────────
+
 async function processIndividualEmail(email, record, tokens) {
     const currentEmployeeId = record.employee_id;
-    const receiverAddress = extractEmail(email.deliveredTo || email.to);
-    const senderAddress = extractEmail(email.from);
+    const receiverAddress   = extractEmail(email.deliveredTo || email.to);
+    const senderAddress     = extractEmail(email.from);
 
-    console.log(`📧 Processing email for ${currentEmployeeId}: From ${senderAddress} to ${receiverAddress}`);
+    console.log(`📧 Parsing email for employee ${currentEmployeeId}: ${senderAddress} → ${receiverAddress}`);
 
-    // Resolve the "opposition"
-    let otherSideEmail = (extractEmail(email.from) === (record.employees?.emailId)) 
-        ? receiverAddress 
+    // Resolve opposition (employee / client / supplier on the other side)
+    let otherSideEmail = extractEmail(email.from) === record.employees?.emailId
+        ? receiverAddress
         : senderAddress;
 
     let oppositionId = await supabaseService.getEmployeeId(otherSideEmail);
     if (!oppositionId) oppositionId = await supabaseService.getIdByEmail(otherSideEmail, 'clients');
     if (!oppositionId) oppositionId = await supabaseService.getIdByEmail(otherSideEmail, 'suppliers');
 
+    // Media attachment
     let mediaHash = null;
-    let mediaUrl = null;
-
+    let mediaUrl  = null;
     if (email.attachments && email.attachments.length > 0) {
         try {
             const attachment = email.attachments[0];
-            const buffer = await gmailService.getAttachment(tokens, email.id, attachment.id);
+            const buffer     = await gmailService.getAttachment(tokens, email.id, attachment.id);
             mediaHash = crypto.createHash('sha256').update(buffer).digest('hex');
             const fileName = `gmail_${email.id}_${attachment.filename}`;
-            const publicUrl = await supabaseService.uploadFile('artifacts', fileName, buffer, attachment.mimeType);
-            if (publicUrl) mediaUrl = publicUrl;
+            mediaUrl = await supabaseService.uploadFile('artifacts', fileName, buffer, attachment.mimeType);
         } catch (e) {
             console.warn(`⚠️ Attachment error for ${email.id}:`, e.message);
         }
     }
 
+    // Dedup hash
     const emailContext = `${senderAddress}|${receiverAddress}|${email.subject}|${email.body}|${email.timestamp}`;
-    const fullHexHash = crypto.createHash('sha256').update(emailContext).digest('hex');
-    const numericHash = BigInt('0x' + fullHexHash.substring(0, 15)).toString();
+    const fullHexHash  = crypto.createHash('sha256').update(emailContext).digest('hex');
+    const numericHash  = BigInt('0x' + fullHexHash.substring(0, 15)).toString();
 
-    const emailPayload = {
-        sender: senderAddress,
-        receiver: receiverAddress,
-        message: `Subject: ${email.subject}\n\n${email.body}`,
-        employeeId: currentEmployeeId,
-        oppositionId: oppositionId,
-        mediaHash: mediaHash,
-        mediaUrl: mediaUrl,
-        hash: numericHash,
-        threadId: BigInt.asIntN(64, BigInt('0x' + email.threadId)).toString()
+    const parsedEmail = {
+        // intake (messages table) fields
+        messageId:    `GMAIL-${email.id}`,
+        format:       email.attachments?.length > 0 ? 'pdf' : 'text',
+        messageDetails: `Subject: ${email.subject}\n\n${email.body}`,
+        employeeId:   currentEmployeeId,
+        mediaUrl,
+        mediaHash,
+        // email channel (emails table) fields
+        sender:       senderAddress,
+        receiver:     receiverAddress,
+        message:      `Subject: ${email.subject}\n\n${email.body}`,
+        oppositionId: oppositionId || null,
+        hash:         numericHash,
+        threadId:     BigInt.asIntN(64, BigInt('0x' + email.threadId)).toString(),
     };
 
-    await supabaseService.logEmailToDatabase(emailPayload);
-
-    // Flag this employee's knowledge map for rebuild
-    await supabaseService.markKnowledgeMapDirty(currentEmployeeId);
-
-    await intelligenceService.processMessageForGraph(
-        `Subject: ${email.subject}\n\n${email.body}`,
-        { messageId: `GMAIL-${email.id}`, sender: email.from }
-    );
+    await _emailHandler(parsedEmail);
 }
 
 async function pollInboxForEmployee(record) {
     const { employee_id: currentEmployeeId, token_data: tokens } = record;
-    console.log(`🔍 Polling inbox for Employee ID: ${currentEmployeeId}...`);
-
+    console.log(`🔍 Polling inbox for employee ${currentEmployeeId}…`);
     try {
         const newEmails = await gmailService.listNewEmails(tokens);
         if (newEmails.length === 0) return;
-
-        // SEQUENTIAL processing within one employee's task
         for (const email of newEmails) {
             await processIndividualEmail(email, record, tokens);
         }
-    } catch (inboxErr) {
-        console.error(`❌ Error polling inbox for employee ${currentEmployeeId}:`, inboxErr.message);
+    } catch (err) {
+        console.error(`❌ Error polling inbox for employee ${currentEmployeeId}:`, err.message);
     }
 }
 
 async function connectToEmail() {
-    console.log('📬 Starting Omni-Brain Sequential Worker Pool...');
-
-    // Start the 15-minute knowledge map rebuild cycle
+    console.log('📬 Starting Gmail worker pool…');
     knowledgeMapService.start();
-
     setInterval(async () => {
         try {
-            // 1. Fetch all employees who have authenticated Gmail
             const authRecords = await supabaseService.getAuthenticatedEmployees('gmail');
-            console.log(`🔍 Omni-Brain: Polling ${authRecords.length} enabled inboxes...`);
-
-            // 2. Schedule INDEPENDENT tasks with concurrency limit
-            const tasks = authRecords.map(record => pollInboxForEmployee(record));
-            
-            // Wait for all to complete before next cycle starts
-            await Promise.all(tasks);
-            console.log(`✅ Finished polling cycle for ${authRecords.length} inboxes.`);
-            
+            console.log(`🔍 Polling ${authRecords.length} enabled inbox(es)…`);
+            await Promise.all(authRecords.map(r => pollInboxForEmployee(r)));
+            console.log(`✅ Polling cycle complete for ${authRecords.length} inbox(es).`);
         } catch (err) {
-            console.error('❌ Omni-Brain Polling cycle error:', err.message);
+            console.error('❌ Polling cycle error:', err.message);
         }
-    }, 60000); 
+    }, 60000);
 }
 
 if (require.main === module) {
     connectToEmail();
 }
 
-module.exports = { connectToEmail };
+module.exports = { connectToEmail, setEmailHandler };
