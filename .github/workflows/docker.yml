@@ -21,4 +21,4 @@ jobs:
         with:
           context: .
           push: true
-          tags: codedetector/map-my-email:latest
+          tags: dhruvsharma983/map-my-email:latest
